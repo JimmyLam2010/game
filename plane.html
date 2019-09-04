@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+	<title>Document</title>
+	<style>
+		
+	</style>
+	<script src='lufylegend.js-lufylegend-1.10.1/lufylegend-1.10.1.js'></script>
+	<script>
+        //判断是否为手机浏览器
+        if (LGlobal.canTouch) {
+            //以哪种方式去显示屏幕的效果  手机端
+            LGlobal.stageScale = LStageScaleMode.SHOW_ALL;
+
+            //生效上面的属性
+            LSystem.screen(LStage.FULL_SCREEN);
+        }
+    </script>
+</head>
+<body>
+	<div id="legend"></div>
+</body>
+<script src="node_modules/socket.io-client/dist/socket.io.js"></script>
+<script>
+	var imgData = [//要使用到的素材
+		{name:'startbg',path:'images/bg.jpg'},
+		{name:'normal',path:'images/o_startNormal.png'},
+		{name:'select',path:'images/o_startSelected.png'},
+		{name:'sky1',path:'images/o_gamebg0.png'},
+		{name:'sky2',path:'images/o_gamebg1.png'},
+		{name:'bullet',path:'images/o_bullet.png'},
+		{name:'hero',path:'images/o_hero.png'},
+		{name:'hero1',path:'images/o_hero1.png'},
+		{name:'enemy',path:'images/o_enemy.png'},
+		{name:'over',path:'images/o_overbg.png'},
+		{name:'overtext',path:'images/o_gameover.png'},
+	];
+	var imglist;
+	var loadingLayer,backLayer,heroLayer,enemyLayer,bulletLayer,textLayer;
+	var hero;
+	var fruitList = [];
+	var score = 0;
+	var scoreText;
+	var maxFrame = 50;
+	var frameIndex = 0;
+	var period = 10;
+	var btn;
+	var speed = 20;
+	var gameStart = false;
+	var onlinePlayers;
+	var nickname;
+	var firstPlayer;
+
+	//先主动去链接服务器
+    var ws = io.connect("http://localhost:3000");
+
+    //客户端上面的事件 当客户端链接服务器成功后触发的
+    ws.on("connect", function () {
+        nickname = prompt("请输入您的昵称");
+        while (!nickname) {
+            nickname = prompt('请输入您的昵称');
+        }
+
+        //把昵称传递给服务器  1、事件名称，传递值
+        ws.emit('nickname', nickname);
+    })
+
+    //接收昵称已重复的通知
+    ws.on('nickname', function () {
+        nickname = prompt("您的昵称已存在");
+        while (!nickname) {
+            nickname = prompt("您必须要输入昵称才行");
+        }
+
+        //将新输入的昵称再给回服务器来验证是否重复
+        ws.emit('nickname', nickname);
+    });
+
+	LInit(100,"legend",800,450,main);//初始化
+
+	function main(){
+		LGlobal.setDebug(true);
+		//创建一个进度条
+        loadingLayer = new LoadingSample5();
+
+        //添加到舞台上面
+        addChild(loadingLayer);
+		//加载素材
+		LLoadManage.load(imgData,function (progress) {
+            loadingLayer.setProgress(progress);
+		},gameInit);
+
+		LGlobal.stage.addEventListener(LKeyboardEvent.KEY_DOWN,keydown);
+		LGlobal.stage.addEventListener(LKeyboardEvent.KEY_UP,keyup);
+	}
+
+	function gameInit(result){
+		removeChild(loadingLayer);
+		imglist = result;
+		//新建层对象
+        backLayer = new LSprite();
+
+        //将背景层添加到舞台上面
+		addChild(backLayer);
+		start();
+	}
+
+	function start(){
+		var bitmapdata = new LBitmapData(imglist['startbg']);
+		var bitmap = new LBitmap(bitmapdata);
+		backLayer.addChild(bitmap);
+
+		var btnnormaldata = new LBitmapData(imglist['normal']);
+		var btnnormal = new LBitmap(btnnormaldata);
+		var btnselectdata = new LBitmapData(imglist['select']);
+		var btnselect = new LBitmap(btnselectdata);
+
+		btn = new LButton(btnnormal,btnselect);
+		btn.x = (LStage.width-btn.getWidth())*0.5;
+		btn.y = (LStage.height-btn.getHeight())*0.5;
+		backLayer.addChild(btn);
+
+		btn.addEventListener(LMouseEvent.MOUSE_DOWN,startGame);
+
+		ws.on('startGame', function(){
+			gameStart = true;
+			startGame();
+		})
+	}
+
+	function startGame(){
+		if(!gameStart){
+			ws.emit('startGame');
+		}
+		
+		btn.removeEventListener(LMouseEvent.MOUSE_DOWN,startGame);
+		backLayer.removeAllChild();
+		score = 0;
+
+		var bg = new Background();
+		backLayer.addChild(bg);
+
+		heroLayer = new LSprite();			
+		enemyLayer = new LSprite();			
+		bulletLayer = new LSprite();
+		textLayer = new LSprite();
+		
+		backLayer.addChild(heroLayer);
+		backLayer.addChild(enemyLayer);
+		backLayer.addChild(bulletLayer);
+		backLayer.addChild(textLayer);
+
+		addText();
+
+		hero = new Player();
+		hero.name = nickname;
+		heroLayer.addChild(hero);
+
+		if(onlinePlayers){
+			for(i=0;i<onlinePlayers.length;i++){
+				if(onlinePlayers[i]!=nickname){
+					heroOthers = new Player();
+					heroOthers.name = onlinePlayers[i];
+					heroLayer.addChild(heroOthers);
+				}
+			}
+		}
+		
+
+		addEvent();
+	}
+
+    function Background(){
+		var self = this;
+		base(self,LSprite,[]);
+		self.speed = 5;
+		var skyBitmapData1 = new LBitmapData(imglist["sky1"]);
+		var skyBitmapData2 = new LBitmapData(imglist["sky2"]);
+		
+		self.width = skyBitmapData1.image.width;
+		self.skyBitmap1 = new LBitmap(skyBitmapData1);
+		self.skyBitmap2 = new LBitmap(skyBitmapData2);
+		
+		self.skyBitmap2.x = self.width;
+
+		self.addChild(self.skyBitmap1);
+		self.addChild(self.skyBitmap2);
+		
+		self.addEventListener(LEvent.ENTER_FRAME,self.run);
+	}
+
+	Background.prototype.run = function(self){
+		self.skyBitmap1.x -= self.speed;
+		self.skyBitmap2.x -= self.speed;
+		
+		if(self.skyBitmap1.x<-self.width){
+			self.skyBitmap1.x = self.skyBitmap2.x + self.width;
+		}
+		if(self.skyBitmap2.x<-self.width){
+			self.skyBitmap2.x = self.skyBitmap1.x + self.width;
+		}		
+	}
+
+	function addEvent() {
+        //给背景层绑定监听事件  播放事件 播放动画
+		backLayer.addEventListener(LEvent.ENTER_FRAME, onframe);
+		backLayer.addEventListener(LMouseEvent.MOUSE_DOWN, mousedown);
+        backLayer.addEventListener(LKeyboardEvent.KEY_DOWN, keydown);
+        backLayer.addEventListener(LKeyboardEvent.KEY_UP, keyup);
+	}
+	
+	function addText(){
+		scoreText = new LTextField();
+		scoreText.font = '微软雅黑';
+		scoreText.size = 22;
+		scoreText.text = 'Score:'+score;
+		scoreText.color = 'white';
+		scoreText.x = LStage.width - scoreText.getWidth() - 30;
+		scoreText.y = 20;
+		textLayer.addChild(scoreText);
+	}
+
+	function changeText(){
+		scoreText.text = 'Score:'+score;
+		scoreText.x = LStage.width - scoreText.getWidth() - 30;
+	}
+
+	function Player(){
+		var self = this;
+		base(self,LSprite,[]);
+		self.mode = "";
+		
+		if(self.name==nickname){
+			self.hero = new LBitmap(new LBitmapData(imglist['hero']));
+		}else{
+			self.hero = new LBitmap(new LBitmapData(imglist['hero1']));
+		}
+		
+		self.x = 20;
+		self.y = (LStage.height-self.hero.getHeight())*0.5;
+		self.addChild(self.hero);
+		// self.addShape(LShape.VERTICES,heroArray);		
+        //self.graphics.drawVertices(1,"red",heroArray);
+	}
+
+	Player.prototype.run = function(){
+		var self = this;
+
+		if (self.mode == "left") {
+            // self.x -= 10;
+            if (self.x > speed)  //防止贴墙
+            {
+                self.x -= speed;
+            }
+        } else if (self.mode == "right") {
+            if (self.x < LGlobal.width - self.getWidth()) {
+                self.x += speed;
+            }
+        } else if (self.mode == "up") {
+			if (self.y > speed){
+				self.y -= speed;
+			}
+		} else if (self.mode == "down") {
+			if (self.y <LGlobal.height - self.getHeight()) {
+				self.y += speed;
+			}
+		}
+	}
+
+	function onframe(){
+		hero.run();
+
+		for(var i=0;i<bulletLayer.childList.length;i++){
+			bulletLayer.childList[i].run();
+			if(bulletLayer.childList[i].x > LStage.width|| bulletLayer.childList[i].x < 0|| bulletLayer.childList[i].y < 0|| bulletLayer.childList[i].y > LStage.height){			
+				bulletLayer.removeChild(bulletLayer.childList[i]);
+			} 
+		}
+		
+		if(frameIndex++> maxFrame){
+			var enemy = new Enemy();
+			enemyLayer.addChild(enemy);
+			frameIndex = 0;
+		}
+		
+		for(var i=0;i<enemyLayer.childList.length;i++){			
+			if(enemyLayer.childList[i].mode=='complete'){
+				gameOver();
+				enemyLayer.removeChild(enemyLayer.childList[i]);
+			}
+		}
+	}
+
+	function keydown(e) {
+		switch(e.keyCode){
+			case 87:
+				hero.mode = "up";
+				// console.log(hero.mode);
+				break;
+			case 83:
+				hero.mode = "down";
+				// console.log(hero.mode);
+				break;
+			case 65:
+				hero.mode = "left";
+				// console.log(hero.mode);
+				break;
+			case 68:
+				hero.mode = "right";
+				// console.log(hero.mode);
+				break;
+		}
+	}
+
+	function keyup(){
+		hero.mode= "";
+	}
+
+	function mousedown(e){
+		var height = (hero.y+hero.getHeight()*0.5) - e.offsetY+12;
+		var width = e.offsetX - (hero.x+hero.getWidth()*0.5);		
+		var angle = Math.atan2(height,width);
+		var bullet = new Bullet(angle);
+		bulletLayer.addChild(bullet);
+	}
+
+	function Bullet(angle){	
+		var self = this;
+		base(self,LSprite,[]);
+		self._angle = angle*180/Math.PI;
+		self._speed = 10;
+		self._r = 0;
+		
+		self.x = hero.x+hero.getWidth()*0.5;
+		self.y = hero.y+hero.getHeight()*0.5;
+		
+		self.startX = self.x;
+		self.startY = self.y+12;
+		       		
+		self.bullet = new LBitmap(new LBitmapData(imglist["bullet"]));		
+		self.addChild(self.bullet);
+		// self.addShape(LShape.VERTICES,bulletArray);				
+	}
+
+	Bullet.prototype.run = function(){
+		var self = this;
+		self._r += self._speed;
+		var speedY = Math.sin(self._angle*Math.PI/180)*self._r;
+		var speedX = Math.cos(self._angle*Math.PI/180)*self._r;
+		self.x = self.startX + speedX;
+		self.y = self.startY - speedY;		
+	}
+
+	function onframe(){
+		hero.run();
+
+		for(var i=0;i<bulletLayer.childList.length;i++){
+			bulletLayer.childList[i].run();
+			if(bulletLayer.childList[i].x > LStage.width|| bulletLayer.childList[i].x < 0|| bulletLayer.childList[i].y < 0|| bulletLayer.childList[i].y > LStage.height){			
+				bulletLayer.removeChild(bulletLayer.childList[i]);
+			} 
+		}
+		
+		if(frameIndex++> maxFrame){
+			var enemy = new Enemy();
+			enemyLayer.addChild(enemy);
+			frameIndex = 0;
+		}
+		
+		for(var i=0;i<enemyLayer.childList.length;i++){			
+			if(enemyLayer.childList[i].mode=='complete'){
+				gameOver();
+				enemyLayer.removeChild(enemyLayer.childList[i]);
+			}
+		}		
+	}
+
+	function Enemy(){
+		var self = this;
+		base(self,LSprite,[]);
+		
+		self.speed = Math.floor(score/period)+7;
+		self.mode = '';	
+ 				
+		self.enemy = new LBitmap(new LBitmapData(imglist['enemy']));					
+		self.x = LStage.width+self.enemy.getWidth();
+		self.y = Math.floor(Math.random()*(LStage.height-self.enemy.getHeight()));
+		self.addChild(self.enemy);		
+		//self.graphics.drawVertices(1, "red",enemyArray);	
+	
+		// self.addShape(LShape.VERTICES,enemyArray);								
+		self.addEventListener(LEvent.ENTER_FRAME,self.run);				
+	}
+
+	Enemy.prototype.run = function(self){
+		self.x -= self.speed;
+		self.checkHit();
+		if(self.x<-self.getWidth()){
+			self.mode = 'complete';
+		}
+	}
+		
+	Enemy.prototype.checkHit = function(){
+	    
+		var self = this;
+		    
+        for(var i=0;i<bulletLayer.childList.length;i++){
+			if (self.hitTestObject(bulletLayer.childList[i]) == true) {
+			    bulletLayer.removeChild(bulletLayer.childList[i]);
+                enemyLayer.removeChild(self);
+				score ++;
+				changeText();
+			}
+		} 
+				
+        if(self.hitTestObject(heroLayer.childList[0])){	
+			gameOver();
+		}		
+	}
+
+	function gameOver(){
+		backLayer.die();
+		var bitmap;
+		var gameoverLayer = new LSprite();
+		backLayer.addChild(gameoverLayer);
+		bitmap = new LBitmap(new LBitmapData(imglist['over']));
+		gameoverLayer.addChild(bitmap);
+		bitmap = new LBitmap(new LBitmapData(imglist['overtext']));
+		bitmap.x = (LStage.width - bitmap.getWidth()) * 0.5;
+		bitmap.y = (LStage.height - bitmap.getHeight()) * 0.5;
+		gameoverLayer.addChild(bitmap);
+		
+		gameoverLayer.y = -1 * gameoverLayer.getHeight();
+		LTweenLite.to(gameoverLayer,0.7,{
+			y:0,
+			ease:Quad.easeInOut,
+			onComplete:function(){
+				backLayer.addEventListener(LMouseEvent.MOUSE_DOWN,restart);
+			}
+		});
+	}
+	
+	function restart(){
+		backLayer.die();
+		backLayer.removeAllChild();
+		startGame();
+	}
+
+	ws.on('getPlayerList', function(arr){
+		onlinePlayers = arr;
+	})
+</script> 
+</html>
